@@ -1,0 +1,85 @@
+<dashboard version="1.1" script="s2f_setup.js">
+    <label>Configuration</label>
+    <description>Configure CrowdStrike Falcon API credentials, Fusion SOAR workflow defaults, Next-Gen SIEM HEC, and corporate proxy settings.</description>
+
+    <row>
+        <panel>
+            <html>
+                <div style="max-width: 720px; padding: 12px;">
+                    <div id="s2f_status_banner" style="display:none; padding: 10px 14px; margin-bottom: 16px; border-radius: 4px; font-weight: 600;"></div>
+
+                    <h3 style="margin-top: 0;">1. CrowdStrike Falcon OAuth2 &amp; Fusion SOAR</h3>
+                    <div style="margin-bottom: 10px;">
+                        <label style="display:block; font-weight:600;">Falcon Cloud Region</label>
+                        <select data-field="falcon_cloud" style="width: 100%; max-width: 420px;">
+                            <option value="eu-1">eu-1 (https://api.eu-1.crowdstrike.com)</option>
+                            <option value="us-1">us-1 (https://api.crowdstrike.com)</option>
+                            <option value="us-2">us-2 (https://api.us-2.crowdstrike.com)</option>
+                            <option value="us-gov-1">us-gov-1 (https://api.laggar.gcw.crowdstrike.com)</option>
+                            <option value="us-gov-2">us-gov-2 (https://api.us-gov-2.crowdstrike.mil)</option>
+                        </select>
+                    </div>
+
+                    <div style="margin-bottom: 10px;">
+                        <label style="display:block; font-weight:600;">OAuth2 API Client ID</label>
+                        <input type="text" data-field="client_id" placeholder="32-character Client ID" style="width: 100%; max-width: 420px;" />
+                    </div>
+
+                    <div style="margin-bottom: 10px;">
+                        <label style="display:block; font-weight:600;">OAuth2 API Client Secret <span id="s2f_secret_badge" style="font-weight:normal; font-size:12px; color:#53a051;"></span></label>
+                        <input type="password" data-field="client_secret" placeholder="Leave blank to keep existing stored secret" autocomplete="new-password" style="width: 100%; max-width: 420px;" />
+                    </div>
+
+                    <div style="margin-bottom: 10px;">
+                        <label style="display:block; font-weight:600;">Default Delivery Method</label>
+                        <select data-field="delivery_method" style="width: 100%; max-width: 420px;">
+                            <option value="fusion_workflow">CrowdStrike Fusion SOAR Workflow</option>
+                            <option value="ngsiem_hec">CrowdStrike Next-Gen SIEM HEC</option>
+                            <option value="both">Both (Workflow + NG-SIEM HEC)</option>
+                        </select>
+                    </div>
+
+                    <div style="margin-bottom: 16px;">
+                        <label style="display:block; font-weight:600;">Default Fusion Workflow (Definition ID or Name)</label>
+                        <input type="text" data-field="default_workflow" placeholder="e.g. 32-char definition_id or workflow name" style="width: 100%; max-width: 420px;" />
+                    </div>
+
+                    <h3>2. Next-Gen SIEM HEC (Optional)</h3>
+                    <div style="margin-bottom: 10px;">
+                        <label style="display:block; font-weight:600;">NG-SIEM HEC Collector URL</label>
+                        <input type="text" data-field="ngsiem_hec_url" placeholder="https://.../services/collector" style="width: 100%; max-width: 520px;" />
+                    </div>
+
+                    <div style="margin-bottom: 10px;">
+                        <label style="display:block; font-weight:600;">NG-SIEM HEC Token <span id="s2f_hec_badge" style="font-weight:normal; font-size:12px; color:#53a051;"></span></label>
+                        <input type="password" data-field="hec_token" placeholder="Leave blank to keep existing stored token" autocomplete="new-password" style="width: 100%; max-width: 420px;" />
+                    </div>
+
+                    <div style="margin-bottom: 16px;">
+                        <label style="display:block; font-weight:600;">HEC Authorization Scheme</label>
+                        <select data-field="ngsiem_hec_auth_scheme" style="width: 100%; max-width: 420px;">
+                            <option value="Bearer">Bearer</option>
+                            <option value="Splunk">Splunk</option>
+                        </select>
+                    </div>
+
+                    <h3>3. Corporate Proxy &amp; SSL Interception CA</h3>
+                    <div style="margin-bottom: 10px;">
+                        <label style="display:block; font-weight:600;">HTTP/HTTPS Proxy URL</label>
+                        <input type="text" data-field="proxy_url" placeholder="http://proxy.example.com:8080" style="width: 100%; max-width: 420px;" />
+                    </div>
+
+                    <div style="margin-bottom: 16px;">
+                        <label style="display:block; font-weight:600;">Custom CA Bundle Path (Optional — defaults to certs/*.pem)</label>
+                        <input type="text" data-field="ca_bundle_path" placeholder="/opt/splunk/etc/apps/TA-splunk_to_fusion/certs/corp_ca.pem" style="width: 100%; max-width: 520px;" />
+                    </div>
+
+                    <div style="margin-top: 18px;">
+                        <button type="button" id="s2f_btn_save" class="btn btn-primary" style="margin-right: 10px;">Save Configuration</button>
+                        <button type="button" id="s2f_btn_test" class="btn">Test CrowdStrike Connection</button>
+                    </div>
+                </div>
+            </html>
+        </panel>
+    </row>
+</dashboard>

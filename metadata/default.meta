@@ -1,0 +1,11 @@
+[]
+access = read : [ * ], write : [ admin, sc_admin, ess_admin ]
+export = none
+
+[alert_actions]
+access = read : [ * ], write : [ admin, sc_admin, ess_admin ]
+export = system
+
+[macros]
+access = read : [ * ], write : [ admin, sc_admin, ess_admin ]
+export = system

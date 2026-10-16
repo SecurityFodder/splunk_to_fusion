@@ -1,0 +1,143 @@
+<form version="1.1">
+    <label>CrowdStrike Fusion - System Health &amp; Diagnostics</label>
+    <description>Diagnostic monitoring for CrowdStrike API, corporate proxy, TLS inspection, and error trends</description>
+
+    <fieldset submitButton="false" autoRun="true">
+        <input type="time" token="time_range" searchWhenChanged="true">
+            <label>Time Window</label>
+            <default>
+                <earliest>-24h@h</earliest>
+                <latest>now</latest>
+            </default>
+        </input>
+        <input type="text" token="error_filter" searchWhenChanged="true">
+            <label>Filter by Error Text / Event ID</label>
+            <default>*</default>
+        </input>
+    </fieldset>
+
+    <row>
+        <panel>
+            <single>
+                <title>Authentication Errors (401/403)</title>
+                <search>
+                    <query>
+                        `s2f_logs` status=failure (status_code=401 OR status_code=403 OR "Invalid client")
+                        | stats count
+                    </query>
+                    <earliest>$time_range.earliest$</earliest>
+                    <latest>$time_range.latest$</latest>
+                </search>
+                <option name="drilldown">none</option>
+                <option name="rangeColors">["0x53a051","0xd93f3c"]</option>
+                <option name="rangeValues">[0]</option>
+                <option name="useColors">1</option>
+                <option name="underLabel">Expired/Invalid API Secrets</option>
+            </single>
+        </panel>
+
+        <panel>
+            <single>
+                <title>Rate Limit Events (429)</title>
+                <search>
+                    <query>
+                        `s2f_logs` status=failure status_code=429
+                        | stats count
+                    </query>
+                    <earliest>$time_range.earliest$</earliest>
+                    <latest>$time_range.latest$</latest>
+                </search>
+                <option name="drilldown">none</option>
+                <option name="rangeColors">["0x53a051","0xf58f39"]</option>
+                <option name="rangeValues">[0]</option>
+                <option name="useColors">1</option>
+                <option name="underLabel">Throttled Requests</option>
+            </single>
+        </panel>
+
+        <panel>
+            <single>
+                <title>Proxy / TLS Interception Errors</title>
+                <search>
+                    <query>
+                        `s2f_logs` status=failure ("SSLError" OR "certificate" OR "Proxy" OR "407")
+                        | stats count
+                    </query>
+                    <earliest>$time_range.earliest$</earliest>
+                    <latest>$time_range.latest$</latest>
+                </search>
+                <option name="drilldown">none</option>
+                <option name="rangeColors">["0x53a051","0xd93f3c"]</option>
+                <option name="rangeValues">[0]</option>
+                <option name="useColors">1</option>
+                <option name="underLabel">Proxy or CA Cert Issues</option>
+            </single>
+        </panel>
+
+        <panel>
+            <single>
+                <title>Server / Gateway Errors (5xx)</title>
+                <search>
+                    <query>
+                        `s2f_logs` status=failure (status_code=500 OR status_code=502 OR status_code=503 OR status_code=504)
+                        | stats count
+                    </query>
+                    <earliest>$time_range.earliest$</earliest>
+                    <latest>$time_range.latest$</latest>
+                </search>
+                <option name="drilldown">none</option>
+                <option name="rangeColors">["0x53a051","0xd93f3c"]</option>
+                <option name="rangeValues">[0]</option>
+                <option name="useColors">1</option>
+                <option name="underLabel">CrowdStrike Cloud Outages</option>
+            </single>
+        </panel>
+    </row>
+
+    <row>
+        <panel>
+            <chart>
+                <title>Error Distribution by Status Code / Category</title>
+                <search>
+                    <query>
+                        `s2f_logs` status=failure
+                        | eval error_category=case(
+                            status_code=="401" OR status_code=="403", "Authentication (401/403)",
+                            status_code=="429", "Rate Limiting (429)",
+                            status_code>="500", "Server Errors (5xx)",
+                            like(_raw, "%SSL%") OR like(_raw, "%certificate%"), "TLS / CA Cert Error",
+                            like(_raw, "%Proxy%"), "Proxy Error",
+                            1==1, "Other Failure"
+                        )
+                        | timechart count by error_category
+                    </query>
+                    <earliest>$time_range.earliest$</earliest>
+                    <latest>$time_range.latest$</latest>
+                </search>
+                <option name="charting.chart">column</option>
+                <option name="charting.chart.stackMode">stacked</option>
+            </chart>
+        </panel>
+    </row>
+
+    <row>
+        <panel>
+            <table>
+                <title>Recent Error Log Trace</title>
+                <search>
+                    <query>
+                        `s2f_logs` status=failure $error_filter$
+                        | table _time, event_id, rule_name, action, status_code, error_msg, _raw
+                        | rename _time as "Timestamp", event_id as "Notable ID", rule_name as "Detection", action as "Action", status_code as "Code", error_msg as "Error Summary", _raw as "Raw Log"
+                        | sort - "Timestamp"
+                        | head 50
+                    </query>
+                    <earliest>$time_range.earliest$</earliest>
+                    <latest>$time_range.latest$</latest>
+                </search>
+                <option name="drilldown">none</option>
+                <option name="count">15</option>
+            </table>
+        </panel>
+    </row>
+</form>

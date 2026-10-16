@@ -1,0 +1,29 @@
+<form class="form-horizontal form-complex">
+    <div class="control-group">
+        <label class="control-label" for="delivery_method">Delivery Method</label>
+        <div class="controls">
+            <select name="action.send_to_fusion.param.delivery_method" id="delivery_method">
+                <option value="fusion_workflow" selected="selected">CrowdStrike Fusion SOAR Workflow</option>
+                <option value="ngsiem_hec">CrowdStrike Next-Gen SIEM HEC</option>
+                <option value="both">Both (Workflow + NG-SIEM HEC)</option>
+            </select>
+            <span class="help-block">Select whether to trigger a Fusion workflow, ingest into NG-SIEM, or both.</span>
+        </div>
+    </div>
+
+    <div class="control-group">
+        <label class="control-label" for="workflow">Workflow Override</label>
+        <div class="controls">
+            <input type="text" name="action.send_to_fusion.param.workflow" id="workflow" placeholder="e.g. Incident Intake Workflow or definition_id" class="input-xlarge" />
+            <span class="help-block">Optional: override the default configured Fusion workflow.</span>
+        </div>
+    </div>
+
+    <div class="control-group">
+        <label class="control-label" for="comment">Analyst Comment</label>
+        <div class="controls">
+            <textarea name="action.send_to_fusion.param.comment" id="comment" rows="3" class="input-xlarge" placeholder="Reason for escalation or additional context..."></textarea>
+            <span class="help-block">This comment will be attached to the CrowdStrike workflow execution and incident.</span>
+        </div>
+    </div>
+</form>

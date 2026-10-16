@@ -1,0 +1,173 @@
+<form version="1.1">
+    <label>CrowdStrike Fusion - Operational Overview</label>
+    <description>Live statistics and operational metrics for notable event dispatch to CrowdStrike Fusion and NG-SIEM</description>
+
+    <fieldset submitButton="false" autoRun="true">
+        <input type="time" token="time_range" searchWhenChanged="true">
+            <label>Time Window</label>
+            <default>
+                <earliest>-24h@h</earliest>
+                <latest>now</latest>
+            </default>
+        </input>
+        <input type="dropdown" token="delivery_filter" searchWhenChanged="true">
+            <label>Delivery Method</label>
+            <choice value="*">All Methods</choice>
+            <choice value="fusion_workflow">Fusion Workflow</choice>
+            <choice value="ngsiem_hec">NG-SIEM HEC</choice>
+            <choice value="both">Both</choice>
+            <default>*</default>
+        </input>
+    </fieldset>
+
+    <row>
+        <panel>
+            <single>
+                <title>Total Dispatches</title>
+                <search>
+                    <query>
+                        `s2f_logs` action=alert_action_complete delivery_method=$delivery_filter$
+                        | stats count
+                    </query>
+                    <earliest>$time_range.earliest$</earliest>
+                    <latest>$time_range.latest$</latest>
+                </search>
+                <option name="drilldown">none</option>
+                <option name="underLabel">Notable Events Sent</option>
+            </single>
+        </panel>
+
+        <panel>
+            <single>
+                <title>Success Rate</title>
+                <search>
+                    <query>
+                        `s2f_logs` (action=execute_workflow OR action=send_hec) delivery_method=$delivery_filter$
+                        | stats count(eval(status="success")) as success_count, count as total_count
+                        | eval rate=round((success_count / total_count) * 100, 1)
+                        | fields rate
+                    </query>
+                    <earliest>$time_range.earliest$</earliest>
+                    <latest>$time_range.latest$</latest>
+                </search>
+                <option name="drilldown">none</option>
+                <option name="numberPrecision">0.1</option>
+                <option name="unit">%</option>
+                <option name="rangeColors">["0xd93f3c","0xf58f39","0x53a051"]</option>
+                <option name="rangeValues">[90,98]</option>
+                <option name="useColors">1</option>
+                <option name="underLabel">Delivery Success %</option>
+            </single>
+        </panel>
+
+        <panel>
+            <single>
+                <title>Failed Dispatches</title>
+                <search>
+                    <query>
+                        `s2f_logs` status=failure delivery_method=$delivery_filter$
+                        | stats count
+                    </query>
+                    <earliest>$time_range.earliest$</earliest>
+                    <latest>$time_range.latest$</latest>
+                </search>
+                <option name="drilldown">none</option>
+                <option name="rangeColors">["0x53a051","0xd93f3c"]</option>
+                <option name="rangeValues">[0]</option>
+                <option name="useColors">1</option>
+                <option name="underLabel">Total Errors</option>
+            </single>
+        </panel>
+
+        <panel>
+            <single>
+                <title>Average Latency</title>
+                <search>
+                    <query>
+                        `s2f_logs` (action=execute_workflow OR action=send_hec) delivery_method=$delivery_filter$
+                        | stats avg(duration_ms) as avg_duration
+                        | eval avg_duration=round(avg_duration, 0)
+                    </query>
+                    <earliest>$time_range.earliest$</earliest>
+                    <latest>$time_range.latest$</latest>
+                </search>
+                <option name="drilldown">none</option>
+                <option name="unit">ms</option>
+                <option name="underLabel">API Response Time</option>
+            </single>
+        </panel>
+    </row>
+
+    <row>
+        <panel>
+            <chart>
+                <title>Dispatches Over Time by Status</title>
+                <search>
+                    <query>
+                        `s2f_logs` (action=execute_workflow OR action=send_hec) delivery_method=$delivery_filter$
+                        | timechart count by status
+                    </query>
+                    <earliest>$time_range.earliest$</earliest>
+                    <latest>$time_range.latest$</latest>
+                </search>
+                <option name="charting.chart">column</option>
+                <option name="charting.chart.stackMode">stacked</option>
+                <option name="charting.fieldColors">{"success": 0x53a051, "failure": 0xd93f3c}</option>
+            </chart>
+        </panel>
+
+        <panel>
+            <chart>
+                <title>Dispatches by Delivery Method</title>
+                <search>
+                    <query>
+                        `s2f_logs` action=alert_action_complete delivery_method=$delivery_filter$
+                        | stats count by delivery_method
+                    </query>
+                    <earliest>$time_range.earliest$</earliest>
+                    <latest>$time_range.latest$</latest>
+                </search>
+                <option name="charting.chart">pie</option>
+            </chart>
+        </panel>
+    </row>
+
+    <row>
+        <panel>
+            <table>
+                <title>Top Triggering ES Detection Rules</title>
+                <search>
+                    <query>
+                        `s2f_logs` (action=execute_workflow OR action=send_hec) delivery_method=$delivery_filter$
+                        | stats count as "Total Sent", count(eval(status="success")) as "Successful", count(eval(status="failure")) as "Failed" by rule_name
+                        | sort - "Total Sent"
+                        | head 10
+                    </query>
+                    <earliest>$time_range.earliest$</earliest>
+                    <latest>$time_range.latest$</latest>
+                </search>
+                <option name="drilldown">none</option>
+                <option name="count">10</option>
+            </table>
+        </panel>
+
+        <panel>
+            <table>
+                <title>Recent Dispatches &amp; Execution IDs</title>
+                <search>
+                    <query>
+                        `s2f_logs` action=execute_workflow delivery_method=$delivery_filter$
+                        | table _time, status, event_id, rule_name, exec_id, duration_ms
+                        | rename _time as "Timestamp", status as "Status", event_id as "Notable ID", rule_name as "Detection Rule", exec_id as "CrowdStrike Exec ID", duration_ms as "Latency (ms)"
+                        | sort - "Timestamp"
+                        | head 20
+                    </query>
+                    <earliest>$time_range.earliest$</earliest>
+                    <latest>$time_range.latest$</latest>
+                </search>
+                <option name="drilldown">none</option>
+                <option name="count">10</option>
+            </table>
+        </panel>
+    </row>
+</form>

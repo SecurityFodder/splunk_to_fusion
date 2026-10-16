@@ -31,6 +31,7 @@ MANIFEST
 #   before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
 *.spec
+!*.conf.spec
 
 # Installer logs
 pip-log.txt
@@ -218,3 +219,18 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Splunk runtime & local overrides (contains credentials/tokens)
+local/
+metadata/local.meta
+
+# Corporate CA certificates
+certs/*.pem
+certs/*.crt
+certs/*.key
+
+# Packaging & OS
+*.spl
+*.tar.gz
+*.tgz
+.DS_Store

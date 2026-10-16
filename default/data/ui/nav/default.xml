@@ -1,0 +1,9 @@
+<nav color="#DB0011">
+    <view name="fusion_overview" default="true" />
+    <view name="fusion_health" />
+    <view name="fusion_setup" />
+    <view name="reports" />
+    <view name="alerts" />
+    <view name="search" />
+</nav>
+
