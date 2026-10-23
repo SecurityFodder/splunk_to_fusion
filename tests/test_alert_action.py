@@ -23,10 +23,13 @@ sys.path.insert(0, os.path.join(APP_ROOT, "bin"))
 
 import send_to_fusion
 from send_to_fusion import (
+    build_case_payload,
     build_finding_payload,
     dispatch_finding,
     extract_alert_results,
+    extract_iocs,
     get_splunk_conf,
+    list_cids,
     parse_alert_input,
     writeback_notable_comment,
 )
@@ -122,10 +125,45 @@ class TestAlertAction(unittest.TestCase):
         self.assertNotIn("_time", payload["details"])
         self.assertIn("dest_ip", payload["details"])
 
+    def test_extract_iocs(self):
+        result = {
+            "sha256": "a" * 64,
+            "src_ip": "10.0.0.1",
+            "dest": "example.com",
+            "md5": "",
+        }
+        self.assertEqual(extract_iocs(result, "sha256"), [("sha256", "a" * 64, "sha256")])
+        self.assertEqual(extract_iocs(result, "src_ip"), [("ipv4", "10.0.0.1", "src_ip")])
+        # The value, not the field name, decides the type.
+        self.assertEqual(extract_iocs(result, "dest"), [("domain", "example.com", "dest")])
+        self.assertEqual(extract_iocs(result, "md5"), [])
+        self.assertEqual(extract_iocs({}, ""), [])
+        self.assertEqual(len(extract_iocs(result, "sha256, src_ip, dest")), 3)
+        # A value that is not a supported indicator type is skipped, not sent.
+        self.assertEqual(extract_iocs({"dest": "not an indicator"}, "dest"), [])
+
+    def test_build_case_payload(self):
+        payload = build_case_payload({"rule_name": "Test Rule", "urgency": "critical"})
+        self.assertEqual(payload["name"], "Test Rule")
+        self.assertEqual(payload["severity"], 90)
+        self.assertEqual(payload["status"], "New")
+        self.assertEqual(payload["tags"], ["splunk", "notable"])
+
+        custom = build_case_payload(
+            {"rule_name": "Test Rule", "urgency": "low"},
+            {"case_name": "Custom Case", "case_tags": "alpha, beta"},
+        )
+        self.assertEqual(custom["name"], "Custom Case")
+        self.assertEqual(custom["severity"], 30)
+        self.assertEqual(custom["tags"], ["alpha", "beta"])
+
     def test_get_splunk_conf_reads_default_conf(self):
         conf = get_splunk_conf(session_key=None)
         self.assertEqual(conf.get("falcon_cloud"), "eu-1")
-        self.assertEqual(conf.get("delivery_method"), "fusion_workflow")
+        self.assertEqual(conf.get("default_workflow"), "")
+
+    def test_list_cids_includes_default(self):
+        self.assertIn("default", list_cids(session_key=None))
 
     def test_writeback_es8_rest_fallback_to_notable_update(self):
         called_urls = []
@@ -169,6 +207,63 @@ class TestAlertAction(unittest.TestCase):
             "payload": json.dumps({"op": "save_config", "falcon_cloud": "us-1"})
         }))
         self.assertEqual(save_resp["status"], 403)
+
+        # CID list is readable, CID config is readable, save_cid is admin-only
+        cids_resp = broker.handle(json.dumps({
+            "method": "POST",
+            "session": {"authtoken": ""},
+            "payload": json.dumps({"op": "get_cids"})
+        }))
+        self.assertEqual(cids_resp["status"], 200)
+        self.assertIn("default", json.loads(cids_resp["payload"])["cids"])
+
+        cid_resp = broker.handle(json.dumps({
+            "method": "POST",
+            "session": {"authtoken": ""},
+            "payload": json.dumps({"op": "get_cid", "cid": "default"})
+        }))
+        self.assertEqual(cid_resp["status"], 200)
+        self.assertEqual(json.loads(cid_resp["payload"])["config"]["falcon_cloud"], "eu-1")
+
+        save_cid_resp = broker.handle(json.dumps({
+            "method": "POST",
+            "session": {"authtoken": ""},
+            "payload": json.dumps({"op": "save_cid", "cid": "tenant-a", "client_id": "abc", "client_secret": "xyz"})
+        }))
+        self.assertEqual(save_cid_resp["status"], 403)
+
+    def test_broker_save_cid_requires_admin(self):
+        broker = S2FBrokerHandler()
+        with mock.patch("s2f_broker._user_has_admin_capability", return_value=False):
+            resp = broker.handle(json.dumps({
+                "method": "POST",
+                "session": {"authtoken": "analyst_token"},
+                "system_authtoken": "system_token",
+                "payload": json.dumps({
+                    "op": "save_cid", "cid": "tenant-b",
+                    "client_id": "cid-b", "client_secret": "secret-b"
+                })
+            }))
+        self.assertEqual(resp["status"], 403)
+
+    def test_broker_save_cid_admin_stores_config_and_secret(self):
+        broker = S2FBrokerHandler()
+        with mock.patch("s2f_broker._user_has_admin_capability", return_value=True), \
+             mock.patch("s2f_broker.save_splunk_conf") as save_conf, \
+             mock.patch("s2f_broker.upsert_stored_credential") as save_cred:
+            resp = broker.handle(json.dumps({
+                "method": "POST",
+                "session": {"authtoken": "admin_token"},
+                "system_authtoken": "system_token",
+                "payload": json.dumps({
+                    "op": "save_cid", "cid": "tenant-a",
+                    "client_id": "cid-a", "client_secret": "secret-a"
+                })
+            }))
+        self.assertEqual(resp["status"], 200)
+        save_conf.assert_called_once()
+        self.assertEqual(save_conf.call_args.kwargs["stanza"], "cid:tenant-a")
+        save_cred.assert_called_once_with("system_token", "ta_splunk_to_fusion", "cid-a", "secret-a")
 
     def test_app_structure_py39_ast_and_xml_validity(self):
         # 1. Verify all Python files parse cleanly under Python 3.9 syntax rules

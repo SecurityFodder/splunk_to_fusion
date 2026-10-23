@@ -163,6 +163,27 @@ class CrowdStrikeClient:
             self._token_expiry = time.time() + float(res.get("expires_in", 1799)) - 60.0
             return self._access_token
 
+    def _authorized_json(self, url, payload, method="POST"):
+        """Sends a JSON body with a bearer token, refreshing once on 401."""
+        data = json.dumps(payload).encode("utf-8")
+
+        def _send(bearer_token):
+            req = urllib.request.Request(
+                url,
+                data=data,
+                headers={"Authorization": f"Bearer {bearer_token}", "Content-Type": "application/json"},
+                method=method,
+            )
+            return self._request_with_retry(req)
+
+        token = self.get_token()
+        try:
+            return _send(token)
+        except CrowdStrikeError as err:
+            if err.status_code == 401:
+                return _send(self.get_token(force_refresh=True))
+            raise
+
     def execute_workflow(self, workflow_ref, payload, dedup_key=None):
         """
         Executes an on-demand Fusion workflow.
@@ -179,42 +200,63 @@ class CrowdStrikeClient:
         url = f"{self.base_url}/workflows/entities/execute/v1?{urllib.parse.urlencode(params)}"
 
         # Cap payload at 240 KB without mutating caller's dict
-        json_body = json.dumps(payload)
-        if len(json_body.encode("utf-8")) > 245760 and isinstance(payload, dict):
+        if len(json.dumps(payload).encode("utf-8")) > 245760 and isinstance(payload, dict):
             logger.warning("Payload exceeds 240KB; truncating details.")
-            json_body = json.dumps({
+            payload = {
                 **payload,
                 "details": {"truncated": True, "notice": "Event details exceeded 240KB limit."},
-            })
-        body_bytes = json_body.encode("utf-8")
+            }
 
-        def _send(bearer_token):
-            req = urllib.request.Request(
-                url,
-                data=body_bytes,
-                headers={"Authorization": f"Bearer {bearer_token}", "Content-Type": "application/json"},
-                method="POST",
-            )
-            return self._request_with_retry(req)
-
-        token = self.get_token()
-        try:
-            res = _send(token)
-        except CrowdStrikeError as err:
-            if err.status_code == 401:
-                res = _send(self.get_token(force_refresh=True))
-            else:
-                raise
-
+        res = self._authorized_json(url, payload)
         resources = res.get("resources", [])
         return resources[0] if resources else res.get("execution_id", "unknown")
 
-    def send_hec(self, hec_url, token, event_payload, auth_scheme="Bearer"):
+    def create_case(self, name, description="", severity=50, status="New", tags=None, evidence=None):
+        """Creates a Falcon Fusion SOAR case."""
+        if not name:
+            raise CrowdStrikeError("Case name is required.")
+        body = {
+            "name": name,
+            "description": description,
+            "severity": int(severity),
+            "status": status,
+        }
+        if tags:
+            body["tags"] = tags
+        if evidence:
+            body["evidence"] = evidence
+        res = self._authorized_json(f"{self.base_url}/cases/entities/cases/v2", body, method="PUT")
+        resources = res.get("resources", [])
+        return resources[0] if resources else res
+
+    def save_ioc(self, ioc_type, value, action="detect", platforms=None,
+                 severity="medium", description="", source="Splunk ES"):
+        """Saves a custom IOC with detect, prevent, or no_action."""
+        if action not in ("detect", "prevent", "no_action"):
+            raise CrowdStrikeError(f"Invalid IOC action: {action}. Use detect, prevent, or no_action.")
+        if not ioc_type or not value:
+            raise CrowdStrikeError("ioc_type and value are required.")
+        indicator = {
+            "type": ioc_type,
+            "value": value,
+            "action": action,
+            "severity": severity,
+            "platforms": platforms or ["windows", "linux", "mac"],
+            "description": description,
+            "source": source,
+        }
+        body = {"indicators": [indicator]}
+        if description:
+            body["comment"] = f"Splunk ES: {description}"[:1000]
+        res = self._authorized_json(f"{self.base_url}/iocs/entities/indicators/v1", body)
+        resources = res.get("resources", [])
+        return resources[0] if resources else res
+
+    def send_hec(self, hec_url, token, event_payload):
         """Sends finding to CrowdStrike Next-Gen SIEM HEC."""
         if not hec_url or not token:
             raise CrowdStrikeError("hec_url and token are required for NG-SIEM HEC transmission.")
 
-        scheme = auth_scheme if auth_scheme in ("Bearer", "Splunk") else "Bearer"
         data = json.dumps({
             "event": event_payload,
             "sourcetype": "splunk:es:finding",
@@ -224,7 +266,7 @@ class CrowdStrikeClient:
         req = urllib.request.Request(
             hec_url,
             data=data,
-            headers={"Authorization": f"{scheme} {token}", "Content-Type": "application/json"},
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
             method="POST",
         )
         return self._request_with_retry(req)

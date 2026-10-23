@@ -105,6 +105,44 @@ class MockCrowdStrikeHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(b'{"text": "Success", "code": 0}')
             return
 
+        # 4. IOC create endpoint
+        if parsed_path.path == "/iocs/entities/indicators/v1":
+            auth = self.headers.get("Authorization", "")
+            if not auth.startswith("Bearer "):
+                self.send_response(401)
+                self.end_headers()
+                return
+            self.server.last_ioc_body = json.loads(post_body) if post_body else {}
+            self.send_response(201)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"resources": [{"id": "ioc-456"}]}).encode("utf-8"))
+            return
+
+        self.send_response(404)
+        self.end_headers()
+
+    def do_PUT(self):
+        parsed_path = urllib.parse.urlparse(self.path)
+        content_length = int(self.headers.get("Content-Length", 0))
+        put_body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else ""
+
+        # Case create endpoint
+        if parsed_path.path == "/cases/entities/cases/v2":
+            auth = self.headers.get("Authorization", "")
+            if not auth.startswith("Bearer "):
+                self.send_response(401)
+                self.end_headers()
+                return
+            self.server.last_case_body = json.loads(put_body) if put_body else {}
+            self.send_response(201)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                "resources": [{"id": "case-123", "name": self.server.last_case_body.get("name")}]
+            }).encode("utf-8"))
+            return
+
         self.send_response(404)
         self.end_headers()
 
@@ -213,13 +251,37 @@ class TestCrowdStrikeClient(unittest.TestCase):
         self.assertTrue(self.server.reauthed)
         self.assertEqual(self.server.token_counter, 2)
 
-    def test_send_hec_bearer_and_splunk(self):
+    def test_send_hec(self):
         hec_url = f"{self.base_url}/services/collector"
-        res_bearer = self.client.send_hec(hec_url, "my-hec-token", {"event_id": "hec-1"}, auth_scheme="Bearer")
+        res_bearer = self.client.send_hec(hec_url, "my-hec-token", {"event_id": "hec-1"})
         self.assertEqual(res_bearer.get("code"), 0)
 
-        res_splunk = self.client.send_hec(hec_url, "my-hec-token", {"event_id": "hec-2"}, auth_scheme="Splunk")
-        self.assertEqual(res_splunk.get("code"), 0)
+    def test_create_case(self):
+        case = self.client.create_case(
+            name="Splunk Notable Case",
+            description="Investigate host",
+            severity=70,
+            tags=["splunk", "notable"],
+        )
+        self.assertEqual(case["id"], "case-123")
+        self.assertEqual(self.server.last_case_body["name"], "Splunk Notable Case")
+        self.assertEqual(self.server.last_case_body["severity"], 70)
+        self.assertEqual(self.server.last_case_body["status"], "New")
+        self.assertEqual(self.server.last_case_body["tags"], ["splunk", "notable"])
+
+    def test_save_ioc(self):
+        indicator = self.client.save_ioc(
+            "sha256", "a" * 64, action="prevent", description="malicious binary"
+        )
+        self.assertEqual(indicator["id"], "ioc-456")
+        sent = self.server.last_ioc_body["indicators"][0]
+        self.assertEqual(sent["type"], "sha256")
+        self.assertEqual(sent["value"], "a" * 64)
+        self.assertEqual(sent["action"], "prevent")
+
+    def test_save_ioc_rejects_invalid_action(self):
+        with self.assertRaises(CrowdStrikeError):
+            self.client.save_ioc("sha256", "a" * 64, action="block")
 
     def test_ca_bundle_loading_and_missing_error(self):
         with self.assertRaises(CrowdStrikeError):

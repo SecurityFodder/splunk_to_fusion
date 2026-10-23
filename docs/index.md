@@ -111,10 +111,16 @@ tar -czf TA-splunk_to_fusion-1.0.0.tar.gz \
 
 ### Option 1: Via Splunk Web Setup UI (Recommended)
 1. In Splunk Web, open **Apps > Splunk to CrowdStrike Fusion > Configuration**.
-2. Enter your **Falcon Cloud Region**, **OAuth2 API Client ID**, **OAuth2 API Client Secret**, and **Default Fusion Workflow** (Definition ID or Workflow Name).
-3. *(Optional)* Enter your **NG-SIEM HEC URL** and **HEC Token**, and/or your **HTTP/HTTPS Proxy URL**, **Proxy Username**, **Proxy Password**, and **Custom CA Bundle Path**.
-4. Click **Save Configuration** (secrets are encrypted in `storage/passwords` and replicated across SHC members).
-5. Click **Test CrowdStrike Connection** to verify OAuth2 authentication through your proxy and TLS certificates.
+2. Pick a tenant from the dropdown (`default` for the primary tenant), or choose **+ New tenant...** to add one.
+3. Enter the **Falcon Cloud Region**, **OAuth2 API Client ID**, **OAuth2 API Client Secret**, and **Default Fusion Workflow**.
+4. *(Optional)* Enter the **NG-SIEM HEC URL** and **HEC Token**. Expand **Advanced** for the **HTTP/HTTPS Proxy URL** and **Custom CA Bundle Path**.
+5. Click **Save Configuration**. Secrets are encrypted in `storage/passwords`.
+6. Click **Test CrowdStrike Connection** to verify OAuth2 authentication.
+7. Repeat steps 2–6 for each additional tenant.
+
+Case creation and IOC saving are configured on each alert action, not on the Configuration page.
+
+Only users with `s2f_admin` (or `admin_all_objects`) can save configuration.
 
 ### Option 2: Via Configuration Files & REST API
 Create `local/ta_splunk_to_fusion.conf`:
@@ -123,25 +129,47 @@ Create `local/ta_splunk_to_fusion.conf`:
 falcon_cloud = eu-1
 client_id = your_falcon_client_id
 default_workflow = Incident_Intake_Workflow
-delivery_method = fusion_workflow
 ngsiem_hec_url = https://your-id.ingest.eu-1.crowdstrike.com/services/collector
-ngsiem_hec_auth_scheme = Bearer
 proxy_url = http://proxy.example.com:8080
+
+# Additional tenant, referenced by the alert action cid parameter
+[cid:tenant-a]
+falcon_cloud = us-1
+client_id = your_other_client_id
+default_workflow = Incident_Intake_Workflow
 ```
 And store encrypted secrets via the Configuration page or `storage/passwords` (realm `ta_splunk_to_fusion`):
-- Client Secret username: `<your_falcon_client_id>` (or `client_secret`)
-- NG-SIEM HEC Token username: `hec_token`
+- Client Secret username: `<client_id>` (one entry per CID)
+- NG-SIEM HEC Token username: `hec_token:<cid>` (one entry per CID; `hec_token` still works for the default)
 - Authenticated Proxy URL username (optional): `proxy_url`
+
+Set the alert action's `cid` parameter to the tenant label (e.g. `tenant-a`). Leave it empty for the `[settings]` default.
+
+### Setting reference
+
+| Setting | Default | Meaning |
+|---------|---------|---------|
+| `falcon_cloud` | `eu-1` | Falcon API region or base URL: `us-1`, `us-2`, `eu-1`, `us-gov-1`, `us-gov-2`. |
+| `client_id` | empty | OAuth2 client ID. The secret is stored under this ID. |
+| `default_workflow` | empty | Fusion workflow definition ID or name. |
+| `ngsiem_hec_url` | empty | CrowdStrike NG-SIEM HEC collector URL; required for `ngsiem_hec` or `both`. |
+| `proxy_url` | empty | Optional corporate proxy URL. |
+| `ca_bundle_path` | empty | Optional CA bundle; empty loads `certs/*.pem` and `certs/*.crt`. |
+
+Case and IOC settings are per alert action: `create_case`, `case_name`, `case_tags`, `ioc_action`, and `ioc_fields`.
 
 ---
 
 ## Enabling Health Alerts & Automated Forwarding
-For Splunk AppInspect compliance, all saved searches in `default/savedsearches.conf` ship with `disabled = 1` and `enableSched = 0`. After configuring credentials, go to **Settings > Searches, reports, and alerts** (filtering by `TA-splunk_to_fusion`) and enable:
-- `Fusion - Authentication Failure Alert`
-- `Fusion - Proxy or TLS Failure Alert`
-- `Fusion - High Failure Rate Alert`
-- `Fusion - Daily Operational Summary`
-- *(Optional)* `Fusion - Auto Forward High and Critical Notables`
+For Splunk AppInspect compliance, all saved searches in `default/savedsearches.conf` ship with `disabled = 1` and `enableSched = 0`. Enable them under **Settings > Searches, reports, and alerts**, filtering by `TA-splunk_to_fusion`.
+
+| Saved search | What it does | Default schedule |
+|--------------|--------------|------------------|
+| `Fusion - Authentication Failure Alert` | Fires on 401/403 or invalid-client responses. | Every 15 minutes |
+| `Fusion - Proxy or TLS Failure Alert` | Fires on proxy, TLS, certificate, or 407 errors. | Every 15 minutes |
+| `Fusion - High Failure Rate Alert` | Fires when more than 10% of dispatches fail (minimum 5 events). | Every 15 minutes |
+| `Fusion - Daily Operational Summary` | Reports daily volume, success rate, and latency by delivery method. | Daily at 07:00 |
+| `Fusion - Auto Forward High and Critical Notables` | Optional. Sends new High/Critical ES notables to CrowdStrike and skips ones already delivered. | Every 5 minutes |
 
 ---
 

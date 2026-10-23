@@ -1,6 +1,6 @@
 <form version="1.1">
     <label>CrowdStrike Fusion - Operational Overview</label>
-    <description>Live statistics and operational metrics for notable event dispatch to CrowdStrike Fusion and NG-SIEM</description>
+    <description>Live statistics for notable dispatch to CrowdStrike workflows, Next-Gen SIEM, cases, and IOC Management.</description>
 
     <fieldset submitButton="false" autoRun="true">
         <input type="time" token="time_range" searchWhenChanged="true">
@@ -16,6 +16,7 @@
             <choice value="fusion_workflow">Fusion Workflow</choice>
             <choice value="ngsiem_hec">NG-SIEM HEC</choice>
             <choice value="both">Both</choice>
+            <choice value="none">None (Case/IOC only)</choice>
             <default>*</default>
         </input>
     </fieldset>
@@ -42,7 +43,7 @@
                 <title>Success Rate</title>
                 <search>
                     <query>
-                        `s2f_logs` (action=execute_workflow OR action=send_hec) delivery_method=$delivery_filter$
+                        `s2f_logs` (action=execute_workflow OR action=send_hec OR action=create_case OR action=save_ioc) delivery_method=$delivery_filter$
                         | stats count(eval(status="success")) as success_count, count as total_count
                         | eval rate=round((success_count / total_count) * 100, 1)
                         | fields rate
@@ -84,7 +85,7 @@
                 <title>Average Latency</title>
                 <search>
                     <query>
-                        `s2f_logs` (action=execute_workflow OR action=send_hec) delivery_method=$delivery_filter$
+                        `s2f_logs` (action=execute_workflow OR action=send_hec OR action=create_case OR action=save_ioc) delivery_method=$delivery_filter$
                         | stats avg(duration_ms) as avg_duration
                         | eval avg_duration=round(avg_duration, 0)
                     </query>
@@ -104,7 +105,7 @@
                 <title>Dispatches Over Time by Status</title>
                 <search>
                     <query>
-                        `s2f_logs` (action=execute_workflow OR action=send_hec) delivery_method=$delivery_filter$
+                        `s2f_logs` (action=execute_workflow OR action=send_hec OR action=create_case OR action=save_ioc) delivery_method=$delivery_filter$
                         | timechart count by status
                     </query>
                     <earliest>$time_range.earliest$</earliest>
@@ -138,7 +139,7 @@
                 <title>Top Triggering ES Detection Rules</title>
                 <search>
                     <query>
-                        `s2f_logs` (action=execute_workflow OR action=send_hec) delivery_method=$delivery_filter$
+                        `s2f_logs` (action=execute_workflow OR action=send_hec OR action=create_case OR action=save_ioc) delivery_method=$delivery_filter$
                         | stats count as "Total Sent", count(eval(status="success")) as "Successful", count(eval(status="failure")) as "Failed" by rule_name
                         | sort - "Total Sent"
                         | head 10
@@ -153,7 +154,7 @@
 
         <panel>
             <table>
-                <title>Recent Dispatches &amp; Execution IDs</title>
+                <title>Recent Fusion Workflow Executions</title>
                 <search>
                     <query>
                         `s2f_logs` action=execute_workflow delivery_method=$delivery_filter$

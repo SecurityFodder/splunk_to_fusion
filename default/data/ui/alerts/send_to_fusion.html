@@ -1,13 +1,22 @@
 <form class="form-horizontal form-complex">
     <div class="control-group">
+        <label class="control-label" for="cid">CID / Tenant</label>
+        <div class="controls">
+            <input type="text" name="action.send_to_fusion.param.cid" id="cid" placeholder="default" class="input-xlarge" />
+            <span class="help-block">Optional. Selects a <code>[cid:&lt;name&gt;]</code> tenant from the app configuration. Leave empty to use the default tenant.</span>
+        </div>
+    </div>
+
+    <div class="control-group">
         <label class="control-label" for="delivery_method">Delivery Method</label>
         <div class="controls">
             <select name="action.send_to_fusion.param.delivery_method" id="delivery_method">
                 <option value="fusion_workflow" selected="selected">CrowdStrike Fusion SOAR Workflow</option>
                 <option value="ngsiem_hec">CrowdStrike Next-Gen SIEM HEC</option>
                 <option value="both">Both (Workflow + NG-SIEM HEC)</option>
+                <option value="none">None (Case/IOC only)</option>
             </select>
-            <span class="help-block">Select whether to trigger a Fusion workflow, ingest into NG-SIEM, or both.</span>
+            <span class="help-block">Choose where the notable goes. <code>None</code> is useful when only case creation or IOC saving is enabled.</span>
         </div>
     </div>
 
@@ -15,7 +24,54 @@
         <label class="control-label" for="workflow">Workflow Override</label>
         <div class="controls">
             <input type="text" name="action.send_to_fusion.param.workflow" id="workflow" placeholder="e.g. Incident Intake Workflow or definition_id" class="input-xlarge" />
-            <span class="help-block">Optional: override the default configured Fusion workflow.</span>
+            <span class="help-block">Optional. Overrides the default Fusion workflow for this action.</span>
+        </div>
+    </div>
+
+    <div class="control-group">
+        <label class="control-label" for="create_case">Create Case</label>
+        <div class="controls">
+            <select name="action.send_to_fusion.param.create_case" id="create_case">
+                <option value="none" selected="selected">None</option>
+                <option value="always">Always</option>
+            </select>
+            <span class="help-block"><code>Always</code> opens a CrowdStrike case for each notable. <code>None</code> disables case creation.</span>
+        </div>
+    </div>
+
+    <div class="control-group">
+        <label class="control-label" for="case_name">Case Name</label>
+        <div class="controls">
+            <input type="text" name="action.send_to_fusion.param.case_name" id="case_name" placeholder="Defaults to the rule name" class="input-xlarge" />
+            <span class="help-block">Optional. Name for the CrowdStrike case. Leave empty to use the notable's rule name.</span>
+        </div>
+    </div>
+
+    <div class="control-group">
+        <label class="control-label" for="case_tags">Case Tags</label>
+        <div class="controls">
+            <input type="text" name="action.send_to_fusion.param.case_tags" id="case_tags" placeholder="splunk, notable" class="input-xlarge" />
+            <span class="help-block">Optional. Comma-separated tags for the case. Leave empty to use <code>splunk, notable</code>.</span>
+        </div>
+    </div>
+
+    <div class="control-group">
+        <label class="control-label" for="ioc_action">IOC Action</label>
+        <div class="controls">
+            <select name="action.send_to_fusion.param.ioc_action" id="ioc_action">
+                <option value="none" selected="selected">None</option>
+                <option value="detect">Detect</option>
+                <option value="prevent">Prevent</option>
+            </select>
+            <span class="help-block"><code>Detect</code> adds the IOC in detect mode. <code>Prevent</code> blocks it. <code>None</code> disables IOC saving.</span>
+        </div>
+    </div>
+
+    <div class="control-group">
+        <label class="control-label" for="ioc_fields">IOC Fields</label>
+        <div class="controls">
+            <input type="text" name="action.send_to_fusion.param.ioc_fields" id="ioc_fields" placeholder="e.g. sha256, src_ip, dest_ip" class="input-xlarge" />
+            <span class="help-block">Comma-separated result fields whose values are saved as IOCs. Leave empty to skip IOC saving. The value determines the type (IPv4/IPv6, hash, or domain).</span>
         </div>
     </div>
 
@@ -23,7 +79,7 @@
         <label class="control-label" for="comment">Analyst Comment</label>
         <div class="controls">
             <textarea name="action.send_to_fusion.param.comment" id="comment" rows="3" class="input-xlarge" placeholder="Reason for escalation or additional context..."></textarea>
-            <span class="help-block">This comment will be attached to the CrowdStrike workflow execution and incident.</span>
+            <span class="help-block">Optional context added to the case or workflow payload.</span>
         </div>
     </div>
 </form>

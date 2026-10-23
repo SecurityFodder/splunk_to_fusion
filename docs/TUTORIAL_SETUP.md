@@ -72,18 +72,21 @@ This tutorial walks through the complete process of setting up CrowdStrike Falco
 ### 3.1 Use the Built-in Configuration Page (Recommended)
 1. Log in to Splunk Web as an administrator (`admin` or `ess_admin`).
 2. Open **Apps > Splunk to CrowdStrike Fusion** and click **Configuration** in the top navigation bar.
-3. Fill in the settings:
+3. Pick a tenant from the dropdown (`default` for the primary tenant), or choose **+ New tenant...** to add one.
+4. Fill in the settings:
    - **Falcon Cloud Region:** Select your region (e.g., `eu-1`).
    - **OAuth2 API Client ID:** Paste the Client ID from Step 1.1.
    - **OAuth2 API Client Secret:** Paste the Client Secret from Step 1.1.
-   - **Default Delivery Method:** `CrowdStrike Fusion SOAR Workflow` (or `Both` if also using NG-SIEM HEC).
    - **Default Fusion Workflow:** Enter the Workflow Definition ID or Name from Step 1.2.
-   - **HTTP/HTTPS Proxy URL:** Enter `http://proxy.example.com:8080` (and optional **Custom CA Bundle Path**).
-4. Click **Save Configuration**.
+   - **NG-SIEM HEC URL / HEC Token:** Optional, only if you deliver to Next-Gen SIEM.
+   - **Advanced:** Optional **HTTP/HTTPS Proxy URL** and **Custom CA Bundle Path**.
+5. Click **Save Configuration**.
    - Non-secret settings are saved to `local/ta_splunk_to_fusion.conf`.
    - Secrets (`client_secret`, `hec_token`) are stored encrypted in `storage/passwords` under realm `ta_splunk_to_fusion` and automatically replicated across Search Head Cluster members.
-5. Click **Test CrowdStrike Connection** and confirm the green banner:
+6. Click **Test CrowdStrike Connection** and confirm the green banner:
    `Successfully authenticated with CrowdStrike (eu-1).`
+
+Case creation and IOC saving are configured on each alert action, not on this page.
 
 ### 3.2 Enable Operational Monitoring Alerts
 1. In Splunk Web, navigate to **Settings > Searches, reports, and alerts**.

@@ -8,9 +8,11 @@ Sends Splunk ES 8 notable events to CrowdStrike Fusion SOAR and/or NG-SIEM HEC.
 import configparser
 import csv
 import gzip
+import ipaddress
 import json
 import logging
 import os
+import re
 import ssl
 import sys
 import time
@@ -139,6 +141,40 @@ def get_splunk_conf(session_key, app_name=APP_NAME, conf_name=CONF_NAME, stanza=
     return config_dict
 
 
+def list_cids(session_key, app_name=APP_NAME, conf_name=CONF_NAME):
+    """Returns sorted CID names from [settings] (as 'default') and [cid:*] stanzas."""
+    names = set()
+    app_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    splunk_home = os.environ.get("SPLUNK_HOME", "/opt/splunk")
+    for root in (app_root, os.path.join(splunk_home, "etc", "apps", app_name)):
+        for subdir in ("default", "local"):
+            cp = os.path.abspath(os.path.join(root, subdir, f"{conf_name}.conf"))
+            if not os.path.isfile(cp):
+                continue
+            parser = configparser.ConfigParser(interpolation=None)
+            parser.read(cp, encoding="utf-8")
+            for section in parser.sections():
+                if section == "settings":
+                    names.add("default")
+                elif section.startswith("cid:"):
+                    names.add(section[4:])
+    if session_key:
+        try:
+            url = f"https://127.0.0.1:8089/servicesNS/nobody/{app_name}/configs/conf-{conf_name}?output_mode=json"
+            req = urllib.request.Request(url, headers={"Authorization": f"Splunk {session_key}"})
+            with local_splunk_urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                for entry in data.get("entry", []):
+                    name = entry.get("name", "")
+                    if name == "settings":
+                        names.add("default")
+                    elif name.startswith("cid:"):
+                        names.add(name[4:])
+        except Exception as exc:
+            logger.debug("CID list REST lookup failed: %s", exc)
+    return sorted(names)
+
+
 def get_stored_credential(session_key, realm, username, app_name=APP_NAME):
     """Retrieves decrypted secret from Splunk storage/passwords."""
     if not session_key or not realm or not username:
@@ -219,21 +255,103 @@ def build_finding_payload(result, config):
     }
 
 
+# shortcut: IOC types are inferred from the value, falling back to the field
+# name; add an explicit ioc_type parameter when a field is ambiguous.
+_IOC_TYPE_MAP = {
+    "sha256": "sha256",
+    "sha1": "sha1",
+    "md5": "md5",
+    "domain": "domain",
+    "dest_domain": "domain",
+}
+
+_HASH_TYPES = {64: "sha256", 40: "sha1", 32: "md5"}
+_HEX_RE = re.compile(r"^[0-9a-f]+$")
+_DOMAIN_RE = re.compile(
+    r"^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$",
+    re.IGNORECASE,
+)
+_MAX_IOCS = 10
+
+
+def _infer_ioc_type(value):
+    """Returns the CrowdStrike IOC type implied by a value, or None."""
+    try:
+        ip = ipaddress.ip_address(value)
+    except ValueError:
+        pass
+    else:
+        return "ipv4" if ip.version == 4 else "ipv6"
+
+    lowered = value.lower()
+    if len(lowered) in _HASH_TYPES and _HEX_RE.match(lowered):
+        return _HASH_TYPES[len(lowered)]
+
+    if _DOMAIN_RE.match(value):
+        return "domain"
+    return None
+
+
+def extract_iocs(result, fields):
+    """Returns (type, value, field) for each listed result field that has a value."""
+    indicators = []
+    for field in [f.strip() for f in str(fields or "").split(",") if f.strip()]:
+        if len(indicators) >= _MAX_IOCS:
+            logger.warning("Capped IOC extraction at %d indicators per result.", _MAX_IOCS)
+            break
+        value = str(result.get(field) or "").strip()
+        if not value:
+            continue
+        ioc_type = _infer_ioc_type(value) or _IOC_TYPE_MAP.get(field.lower())
+        if not ioc_type:
+            logger.warning("Skipping IOC field %s: cannot infer a CrowdStrike IOC type from its value.", field)
+            continue
+        indicators.append((ioc_type, value, field))
+    return indicators
+
+
+def build_case_payload(payload, config=None):
+    """Maps a notable payload and the action parameters to a Falcon case body."""
+    config = config or {}
+    urgency = str(payload.get("urgency") or "unknown").lower()
+    severity = {"critical": 90, "high": 70, "medium": 50, "low": 30}.get(urgency, 50)
+    tags = [tag.strip() for tag in str(config.get("case_tags") or "").split(",") if tag.strip()]
+    return {
+        "name": config.get("case_name") or payload.get("rule_name") or "Splunk Notable",
+        "description": json.dumps(payload, default=str)[:4000],
+        "severity": severity,
+        "status": "New",
+        "tags": tags or ["splunk", "notable"],
+    }
+
+
 def dispatch_finding(result, config, session_key=None, app_conf=None, client=None):
     """Dispatches a single notable event dict to CrowdStrike Fusion and/or NG-SIEM HEC."""
     if app_conf is None:
         app_conf = get_splunk_conf(session_key)
 
+    cid_name = (config.get("cid") or app_conf.get("cid") or "default").strip() or "default"
+    if cid_name != "default":
+        cid_conf = get_splunk_conf(session_key, stanza=f"cid:{cid_name}")
+        if cid_conf:
+            app_conf = {**app_conf, **cid_conf}
+
     cloud = config.get("falcon_cloud") or app_conf.get("falcon_cloud") or "eu-1"
     client_id = (config.get("client_id") or app_conf.get("client_id") or "").strip()
+    # shortcut: proxy credentials come from the CID's proxy_url or the shared
+    # `proxy_url` password entry; add a per-CID proxy password when tenants
+    # need different authenticated proxies.
     proxy_url = (
         config.get("proxy_url")
         or get_stored_credential(session_key, CRED_REALM, "proxy_url")
         or app_conf.get("proxy_url")
     )
     ca_bundle = config.get("ca_bundle_path") or app_conf.get("ca_bundle_path")
-    delivery_method = config.get("delivery_method") or app_conf.get("delivery_method") or "fusion_workflow"
+    delivery_method = config.get("delivery_method") or "fusion_workflow"
     workflow_id = (config.get("workflow") or app_conf.get("default_workflow") or "").strip()
+    create_case_mode = (config.get("create_case") or "none").lower()
+    ioc_action = (config.get("ioc_action") or "none").lower()
+    ioc_fields = config.get("ioc_fields") or config.get("ioc_field") or ""
 
     finding_id = result.get("event_id") or result.get("rule_id") or "unknown_event"
     payload = build_finding_payload(result, config)
@@ -254,8 +372,11 @@ def dispatch_finding(result, config, session_key=None, app_conf=None, client=Non
         )
 
     hec_url = (config.get("ngsiem_hec_url") or app_conf.get("ngsiem_hec_url") or "").strip()
-    hec_token = get_stored_credential(session_key, CRED_REALM, "hec_token") or app_conf.get("ngsiem_hec_token")
-    hec_auth_scheme = config.get("ngsiem_hec_auth_scheme") or app_conf.get("ngsiem_hec_auth_scheme") or "Bearer"
+    hec_token = (
+        get_stored_credential(session_key, CRED_REALM, f"hec_token:{cid_name}")
+        or get_stored_credential(session_key, CRED_REALM, "hec_token")
+        or app_conf.get("ngsiem_hec_token")
+    )
 
     success_messages = []
     exec_id = ""
@@ -292,7 +413,7 @@ def dispatch_finding(result, config, session_key=None, app_conf=None, client=Non
     if delivery_method in ("ngsiem_hec", "both"):
         hec_start = time.time()
         try:
-            client.send_hec(hec_url, hec_token, payload, auth_scheme=hec_auth_scheme)
+            client.send_hec(hec_url, hec_token, payload)
             hec_duration = int((time.time() - hec_start) * 1000)
             logger.info(
                 'status=success action=send_hec delivery_method="%s" event_id="%s" '
@@ -309,6 +430,60 @@ def dispatch_finding(result, config, session_key=None, app_conf=None, client=Non
                 getattr(err, "status_code", None) or "unknown", _clean_kv(err), hec_duration,
             )
             return False, [str(err)], exec_id
+
+    if create_case_mode in ("always", "true", "1"):
+        try:
+            case = client.create_case(**build_case_payload(payload, config))
+            case_id = (case.get("id") if isinstance(case, dict) else "") or "unknown"
+            logger.info(
+                'status=success action=create_case delivery_method="%s" event_id="%s" '
+                'rule_name="%s" case_id="%s"',
+                _clean_kv(delivery_method), _clean_kv(finding_id),
+                _clean_kv(rule_name), _clean_kv(case_id),
+            )
+            success_messages.append(f"CrowdStrike case created (ID: {case_id})")
+        except CrowdStrikeError as err:
+            logger.error(
+                'status=failure action=create_case delivery_method="%s" event_id="%s" '
+                'rule_name="%s" status_code=%s error_msg="%s"',
+                _clean_kv(delivery_method), _clean_kv(finding_id),
+                _clean_kv(rule_name), getattr(err, "status_code", None) or "unknown", _clean_kv(err),
+            )
+            return False, [str(err)], exec_id
+
+    if ioc_action in ("detect", "prevent"):
+        indicators = extract_iocs(result, ioc_fields)
+        if not indicators:
+            logger.warning(
+                'status=skipped action=save_ioc reason="No listed IOC fields had values" '
+                'delivery_method="%s" event_id="%s" rule_name="%s" ioc_fields="%s"',
+                _clean_kv(delivery_method), _clean_kv(finding_id),
+                _clean_kv(rule_name), _clean_kv(ioc_fields),
+            )
+        for ioc_type, ioc_value, ioc_field in indicators:
+            try:
+                indicator = client.save_ioc(
+                    ioc_type, ioc_value, action=ioc_action,
+                    description=payload.get("rule_name") or "",
+                )
+                ioc_id = (indicator.get("id") if isinstance(indicator, dict) else "") or "unknown"
+                logger.info(
+                    'status=success action=save_ioc delivery_method="%s" event_id="%s" '
+                    'rule_name="%s" ioc_field="%s" ioc_type="%s" ioc_value="%s" ioc_action="%s" ioc_id="%s"',
+                    _clean_kv(delivery_method), _clean_kv(finding_id), _clean_kv(rule_name),
+                    _clean_kv(ioc_field), _clean_kv(ioc_type), _clean_kv(ioc_value),
+                    _clean_kv(ioc_action), _clean_kv(ioc_id),
+                )
+                success_messages.append(f"CrowdStrike IOC saved ({ioc_action}: {ioc_value})")
+            except CrowdStrikeError as err:
+                logger.error(
+                    'status=failure action=save_ioc delivery_method="%s" event_id="%s" '
+                    'rule_name="%s" ioc_field="%s" ioc_type="%s" ioc_value="%s" status_code=%s error_msg="%s"',
+                    _clean_kv(delivery_method), _clean_kv(finding_id), _clean_kv(rule_name),
+                    _clean_kv(ioc_field), _clean_kv(ioc_type), _clean_kv(ioc_value),
+                    getattr(err, "status_code", None) or "unknown", _clean_kv(err),
+                )
+                return False, [str(err)], exec_id
 
     if session_key and finding_id != "unknown_event" and success_messages:
         writeback_notable_comment(session_key, finding_id, f"Sent to CrowdStrike: {' | '.join(success_messages)}")

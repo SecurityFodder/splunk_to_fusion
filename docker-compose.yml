@@ -1,0 +1,40 @@
+services:
+  splunk:
+    image: splunk/splunk:${SPLUNK_VERSION:-9.4.1}
+    container_name: splunk_to_fusion_dev
+    hostname: splunk-to-fusion-dev
+    env_file:
+      - .env
+    environment:
+      - SPLUNK_GENERAL_TERMS=--accept-sgt-current-at-splunk-com
+      - SPLUNK_START_ARGS=--accept-license
+      # Empty value keeps the built-in enterprise trial. The free license
+      # returns empty capabilities, which breaks the setup page's Test button.
+      - SPLUNK_LICENSE_URI=""
+    ports:
+      - "8000:8000"   # Splunk Web
+      - "8089:8089"   # Management/REST
+      - "8088:8088"   # HEC
+    volumes:
+      # Mount the add-on source into Splunk's apps directory.
+      # Changes made locally are reflected immediately after a Splunk restart or
+      # a bundle refresh (Settings > Server controls > Restart Splunk).
+      - ./:/opt/splunk/etc/apps/TA-splunk_to_fusion:rw
+      - splunk_var:/opt/splunk/var:rw
+      - splunk_etc:/opt/splunk/etc/system:rw
+    networks:
+      - splunknet
+    healthcheck:
+      test: ["CMD", "curl", "-fsk", "https://localhost:8089/services/server/info", "-u", "admin:${SPLUNK_PASSWORD}"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+volumes:
+  splunk_var:
+  splunk_etc:
+
+networks:
+  splunknet:
+    driver: bridge
