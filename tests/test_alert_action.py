@@ -33,6 +33,7 @@ from send_to_fusion import (
     parse_alert_input,
     writeback_notable_comment,
 )
+from crowdstrike import CrowdStrikeError
 from s2f_broker import S2FBrokerHandler
 
 
@@ -264,6 +265,69 @@ class TestAlertAction(unittest.TestCase):
         save_conf.assert_called_once()
         self.assertEqual(save_conf.call_args.kwargs["stanza"], "cid:tenant-a")
         save_cred.assert_called_once_with("system_token", "ta_splunk_to_fusion", "cid-a", "secret-a")
+
+    def _broker_request(self, op, body):
+        return json.dumps({
+            "method": "POST",
+            "session": {"authtoken": "admin_token"},
+            "payload": json.dumps({"op": op, **body}),
+        })
+
+    def test_broker_test_connection_validation(self):
+        broker = S2FBrokerHandler()
+        base = {"falcon_cloud": "eu-1", "client_id": "a" * 32, "client_secret": "secret"}
+        cases = [
+            ({"falcon_cloud": "eu-1", "client_id": "", "client_secret": ""},
+             "Client ID and Client Secret are required"),
+            ({"falcon_cloud": "eu1", "client_id": "a" * 32, "client_secret": "secret"},
+             "Cloud Region is not recognized"),
+            ({**base, "proxy_url": "proxy.example.com:8080"}, "Proxy URL must start with"),
+            ({**base, "ca_bundle_path": "/nonexistent/ca.pem"}, "Custom CA Bundle Path"),
+        ]
+        with mock.patch("s2f_broker._user_has_admin_capability", return_value=True), \
+             mock.patch("s2f_broker.get_stored_credential", return_value=None):
+            for body, expected in cases:
+                resp = broker.handle(self._broker_request("test_connection", body))
+                self.assertEqual(resp["status"], 400, body)
+                self.assertIn(expected, json.loads(resp["payload"])["error"])
+
+    def test_broker_test_connection_error_messages(self):
+        broker = S2FBrokerHandler()
+        body = {"falcon_cloud": "eu-1", "client_id": "a" * 32, "client_secret": "secret"}
+        cases = [
+            (CrowdStrikeError("CrowdStrike API error 401: Unauthorized", status_code=401), "HTTP 401"),
+            (CrowdStrikeError("CrowdStrike API error 403: Forbidden", status_code=403), "HTTP 403"),
+            (CrowdStrikeError("Connection to CrowdStrike failed: certificate verify failed"),
+             "TLS certificate verification failed"),
+            (CrowdStrikeError("Connection to CrowdStrike failed: timed out"), "timed out"),
+            (CrowdStrikeError("Connection to CrowdStrike failed: Name or service not known"),
+             "Could not resolve"),
+            (RuntimeError("super-secret-value"), "RuntimeError"),
+        ]
+        for error, expected in cases:
+            client = mock.Mock()
+            client.get_token.side_effect = error
+            with mock.patch("s2f_broker._user_has_admin_capability", return_value=True), \
+                 mock.patch("s2f_broker.CrowdStrikeClient", return_value=client):
+                resp = broker.handle(self._broker_request("test_connection", body))
+            self.assertEqual(resp["status"], 400)
+            message = json.loads(resp["payload"])["error"]
+            self.assertIn(expected, message)
+            self.assertNotIn("super-secret-value", message)
+
+    def test_broker_test_connection_success_warnings(self):
+        broker = S2FBrokerHandler()
+        client = mock.Mock()
+        client.get_token.return_value = "token"
+        with mock.patch("s2f_broker._user_has_admin_capability", return_value=True), \
+             mock.patch("s2f_broker.CrowdStrikeClient", return_value=client):
+            resp = broker.handle(self._broker_request("test_connection", {
+                "falcon_cloud": "eu-1", "client_id": "short", "client_secret": "secret",
+            }))
+        self.assertEqual(resp["status"], 200)
+        data = json.loads(resp["payload"])
+        self.assertTrue(data["ok"])
+        self.assertIn("usually 32", data["warnings"][0])
 
     def test_app_structure_py39_ast_and_xml_validity(self):
         # 1. Verify all Python files parse cleanly under Python 3.9 syntax rules

@@ -25,7 +25,7 @@ except ImportError:
         def __init__(self):
             pass
 
-from crowdstrike import CrowdStrikeClient, CrowdStrikeError
+from crowdstrike import CLOUD_URLS, CrowdStrikeClient, CrowdStrikeError
 from send_to_fusion import (
     APP_NAME,
     CONF_NAME,
@@ -96,6 +96,75 @@ def _user_has_admin_capability(user_token):
             return "admin_all_objects" in caps or "s2f_admin" in caps
     except Exception:
         return False
+
+
+def _connection_warnings(client_id, using_stored_secret):
+    """Returns non-fatal configuration warnings for the Test Connection button."""
+    warnings = []
+    if client_id and len(client_id) != 32:
+        warnings.append(f"The Client ID is {len(client_id)} characters; CrowdStrike client IDs are usually 32.")
+    if using_stored_secret:
+        warnings.append("The Client Secret field was blank, so the stored encrypted secret was used.")
+    return warnings
+
+
+def _connection_error_message(err):
+    """Returns an actionable, credential-free message for a failed connection test."""
+    status = getattr(err, "status_code", None)
+    text = f"{getattr(err, 'response_body', '') or ''} {err}".lower()
+
+    # Configuration problems first: these are the easiest for an admin to fix.
+    if "client_id and client_secret are required" in text:
+        return "The Client ID and Client Secret are required. Enter them on this page, or save the secret first."
+    if "ca bundle file not found" in text:
+        return "The Custom CA Bundle Path does not exist. Fix the path or leave it empty to use the certs/ directory."
+    if "failed to load ca bundle" in text:
+        return "The Custom CA Bundle Path could not be read as a PEM bundle. Check that it is a valid CA certificate file."
+    if "certificate verify failed" in text:
+        return ("TLS certificate verification failed. If your network inspects TLS, add the corporate CA to the app's "
+                "certs/ directory or set the Custom CA Bundle Path.")
+
+    # Credential, permission, and CrowdStrike-side responses.
+    if "proxy authentication" in text or status == 407:
+        return ("The proxy requires authentication (HTTP 407). Put the proxy username and password in the Proxy URL, "
+                "for example http://user:pass@proxy.example.com:8080.")
+    if status == 401 or "invalid client" in text or "unauthorized" in text:
+        return ("CrowdStrike rejected the credentials (HTTP 401). Check the Client ID and Client Secret, confirm the "
+                "API client is enabled, and make sure the Falcon Cloud Region matches the tenant.")
+    if status == 403:
+        return ("CrowdStrike denied the request (HTTP 403). The API client may be disabled or missing scopes. Grant "
+                "Workflows: Write and Next-Gen SIEM: Write, plus Cases/IOC scopes if you use them.")
+    if status == 404:
+        return "CrowdStrike returned HTTP 404 for the OAuth2 endpoint. Check the Falcon Cloud Region or custom base URL."
+    if status == 429:
+        return "CrowdStrike rate-limited the request (HTTP 429). Wait a minute and try again."
+    if status and 500 <= status < 600:
+        return (f"CrowdStrike returned HTTP {status}. This usually means a CrowdStrike-side outage; check "
+                "status.crowdstrike.com and retry.")
+    if status:
+        return (f"CrowdStrike returned HTTP {status} while authenticating. Check the region, credentials, and API "
+                "client scopes.")
+    if "missing access_token" in text:
+        return "CrowdStrike returned an unexpected OAuth2 response. Check the region and API client configuration."
+
+    # Network, proxy, and DNS problems.
+    if "name or service not known" in text or "nodename nor servname" in text or "getaddrinfo failed" in text:
+        return ("Could not resolve the CrowdStrike API host. Check the Falcon Cloud Region or custom base URL and the "
+                "Splunk host's DNS.")
+    if "connection refused" in text:
+        return "CrowdStrike refused the connection. Check network egress, firewall rules, and the Falcon Cloud Region."
+    if "tunnel connection failed" in text:
+        return ("The proxy tunnel failed. Check the Proxy URL, its credentials, and whether the proxy allows "
+                "api.crowdstrike.com.")
+    if "timed out" in text or "timeout" in text:
+        return "The connection to CrowdStrike timed out. Check the proxy, network egress, and try again."
+    if "connection reset" in text or "remote end closed" in text:
+        return "The connection closed before CrowdStrike replied. A proxy or firewall may be blocking the request."
+    if "unknown url type" in text or "unknown url" in text:
+        return "The Falcon Cloud Region is not recognized. Choose a listed region or enter a full https:// base URL."
+
+    return (f"Could not authenticate with CrowdStrike ({type(err).__name__}). Check the region, credentials, proxy, "
+            "and CA settings; see the Splunk log for details.")
 
 
 def upsert_stored_credential(system_token, realm, username, secret):
@@ -252,22 +321,50 @@ class S2FBrokerHandler(PersistentServerConnectionApplication):
                 except Exception as err:
                     return _json_response(500, {"ok": False, "error": str(err)})
 
-            cloud = body.get("falcon_cloud") or app_conf.get("falcon_cloud") or "eu-1"
+            cloud = str(body.get("falcon_cloud") or app_conf.get("falcon_cloud") or "eu-1")
             cid = (body.get("client_id") or app_conf.get("client_id") or "").strip()
+            supplied_secret = body.get("client_secret") or ""
             secret = (
-                body.get("client_secret")
+                supplied_secret
                 or get_stored_credential(system_token, CRED_REALM, cid)
                 or get_stored_credential(system_token, CRED_REALM, "client_secret")
             )
             proxy = body.get("proxy_url") if "proxy_url" in body else app_conf.get("proxy_url")
             ca_bundle = body.get("ca_bundle_path") if "ca_bundle_path" in body else app_conf.get("ca_bundle_path")
+
+            if not cid or not secret:
+                return _json_response(400, {
+                    "ok": False,
+                    "error": "The Client ID and Client Secret are required. Enter them on this page, or save the secret first.",
+                })
+            if cloud not in CLOUD_URLS and not cloud.lower().startswith(("http://", "https://")):
+                return _json_response(400, {
+                    "ok": False,
+                    "error": "The Falcon Cloud Region is not recognized. Choose a listed region or enter a full https:// base URL.",
+                })
+            if proxy and not str(proxy).lower().startswith(("http://", "https://")):
+                return _json_response(400, {
+                    "ok": False,
+                    "error": "The Proxy URL must start with http:// or https://.",
+                })
+            if ca_bundle and not (isinstance(ca_bundle, str) and os.path.isfile(ca_bundle)):
+                return _json_response(400, {
+                    "ok": False,
+                    "error": "The Custom CA Bundle Path does not point to a file. Fix the path or leave it empty.",
+                })
+
             try:
                 CrowdStrikeClient(
                     cloud=cloud, client_id=cid, client_secret=secret, proxy_url=proxy, ca_bundle=ca_bundle, timeout=15
                 ).get_token(force_refresh=True)
-                return _json_response(200, {"ok": True, "message": f"Successfully authenticated with CrowdStrike ({cloud})."})
+                cloud_label = cloud if cloud in CLOUD_URLS else "custom base URL"
+                return _json_response(200, {
+                    "ok": True,
+                    "message": f"Successfully authenticated with CrowdStrike ({cloud_label}).",
+                    "warnings": _connection_warnings(cid, bool(secret and not supplied_secret)),
+                })
             except Exception as err:
-                return _json_response(400, {"ok": False, "error": str(err)})
+                return _json_response(400, {"ok": False, "error": _connection_error_message(err)})
 
         return _json_response(400, {"ok": False, "error": f"Unsupported operation: {op}"})
 
