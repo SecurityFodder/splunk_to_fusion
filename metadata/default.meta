@@ -1,3 +1,17 @@
+# default.meta: Knowledge Object Permissions and Export Scope
+# ----------------------------------------------------------------------------
+# In Splunk, default.meta controls:
+# 1. Who can read or write configurations inside this app (`access`).
+# 2. Which configurations are visible to OTHER apps like Splunk Enterprise
+#    Security (`export = system` vs `export = none`).
+#
+# Why `export = system` is set ONLY on [alert_actions] and [macros]:
+# Splunk Enterprise Security runs in its own app context (`SplunkEnterpriseSecuritySuite`).
+# Exporting `alert_actions` and `macros` globally (`system`) allows ES 8 to see
+# and run "Send to CrowdStrike Fusion" and `s2f_logs`, while keeping internal
+# app settings isolated (`export = none`).
+# ----------------------------------------------------------------------------
+
 []
 access = read : [ * ], write : [ admin, sc_admin, ess_admin ]
 export = none
